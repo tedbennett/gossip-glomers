@@ -1,5 +1,8 @@
 use gossip_glomers::*;
-use std::{collections::HashMap, io::StdoutLock};
+use std::{
+    collections::{HashMap, HashSet},
+    io::StdoutLock,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,9 +13,11 @@ enum BroadcastPayload {
     Broadcast { message: usize },
     BroadcastOk,
     Read,
-    ReadOk { messages: Vec<usize> },
+    // HashSet serializes to a list in JSON
+    ReadOk { messages: HashSet<usize> },
     Topology { topology: Topology },
     TopologyOk,
+    Gossip { messages: Vec<usize> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +29,8 @@ struct Topology {
 struct BroadcastNode {
     id: usize,
     node_id: String,
-    messages: Vec<usize>,
+    messages: HashSet<usize>,
+    known_messages: HashMap<String, HashSet<usize>>,
     neighbours: Vec<String>,
 }
 
@@ -33,8 +39,14 @@ impl Node<BroadcastPayload> for BroadcastNode {
         Self {
             id,
             node_id: init.node_id,
-            messages: Vec::new(),
-            neighbours: Vec::new(),
+            messages: HashSet::new(),
+            known_messages: HashMap::from_iter(
+                init.node_ids
+                    .clone()
+                    .into_iter()
+                    .map(|n| (n, HashSet::new())),
+            ),
+            neighbours: init.node_ids,
         }
     }
 
@@ -43,55 +55,66 @@ impl Node<BroadcastPayload> for BroadcastNode {
         input: Message<BroadcastPayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match &input.body.payload {
+        let mut reply = input.into_reply(Some(self.id));
+        match reply.body.payload {
             BroadcastPayload::Broadcast { message } => {
                 // Store in list of messages
-                self.messages.push(*message);
-                let reply = self.get_reply(BroadcastPayload::BroadcastOk, input)?;
-                send(reply, output)?;
+                self.messages.insert(message);
+                reply.body.payload = BroadcastPayload::BroadcastOk;
+                send(&reply, output)?;
+                self.id += 1;
             }
-            BroadcastPayload::BroadcastOk { .. } => {}
             BroadcastPayload::Read => {
-                let reply = self.get_reply(
-                    BroadcastPayload::ReadOk {
-                        messages: self.messages.clone(),
-                    },
-                    input,
-                )?;
-                send(reply, output)?;
+                reply.body.payload = BroadcastPayload::ReadOk {
+                    messages: self.messages.clone(),
+                };
+
+                send(&reply, output)?;
+                self.id += 1;
             }
-            BroadcastPayload::ReadOk { .. } => {}
             BroadcastPayload::Topology { topology } => {
                 if let Some(neighbours) = topology.neighbours.get(&self.node_id) {
                     self.neighbours = neighbours.to_vec();
                 }
-                let reply = self.get_reply(BroadcastPayload::TopologyOk, input)?;
-                send(reply, output)?;
+                reply.body.payload = BroadcastPayload::TopologyOk;
+                send(&reply, output)?;
+                self.id += 1;
             }
-            BroadcastPayload::TopologyOk => {}
+            BroadcastPayload::Gossip { messages } => {
+                self.messages.extend(messages);
+            }
+            BroadcastPayload::TopologyOk
+            | BroadcastPayload::ReadOk { .. }
+            | BroadcastPayload::BroadcastOk { .. } => {}
         }
         Ok(())
     }
 
-    fn get_reply(
-        &mut self,
-        response: BroadcastPayload,
-        input: Message<BroadcastPayload>,
-    ) -> anyhow::Result<Message<BroadcastPayload>> {
-        let reply = Message {
-            src: input.dest,
-            dest: input.src,
-            body: Body {
-                id: Some(self.id),
-                in_reply_to: input.body.id,
-                payload: response,
-            },
-        };
-        self.id += 1;
-        Ok(reply)
+    fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()> {
+        for neighbour in self.neighbours.as_slice() {
+            let known = &self.known_messages[neighbour];
+            let messages = self
+                .messages
+                .clone()
+                .into_iter()
+                .filter(|m| !known.contains(m))
+                .collect();
+            let message = Message {
+                src: self.node_id.clone(),
+                dest: neighbour.to_string(),
+                body: Body {
+                    id: None,
+                    in_reply_to: None,
+                    payload: BroadcastPayload::Gossip { messages },
+                },
+            };
+            send(&message, output)?;
+        }
+        Ok(())
     }
 }
 
-fn main() -> anyhow::Result<()> {
-    run_loop::<_, BroadcastNode>()
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    async_run_loop::<_, BroadcastNode>().await
 }

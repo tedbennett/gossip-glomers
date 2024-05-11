@@ -28,37 +28,21 @@ impl Node<GeneratePayload> for GenerateNode {
         input: Message<GeneratePayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match &input.body.payload {
+        let mut reply = input.into_reply(Some(self.id));
+        match reply.body.payload {
             GeneratePayload::Generate => {
-                let reply = self.get_reply(
-                    GeneratePayload::GenerateOk {
-                        id: format!("{}-{}", self.node_id, self.id),
-                    },
-                    input,
-                )?;
-                send(reply, output)?;
+                let guid = format!("{}-{}", self.node_id, self.id);
+                reply.body.payload = GeneratePayload::GenerateOk { id: guid };
+                send(&reply, output)?;
+                self.id += 1;
             }
             GeneratePayload::GenerateOk { .. } => {}
         }
         Ok(())
     }
 
-    fn get_reply(
-        &mut self,
-        response: GeneratePayload,
-        input: Message<GeneratePayload>,
-    ) -> anyhow::Result<Message<GeneratePayload>> {
-        let reply = Message {
-            src: input.dest,
-            dest: input.src,
-            body: Body {
-                id: Some(self.id),
-                in_reply_to: input.body.id,
-                payload: response,
-            },
-        };
-        self.id += 1;
-        Ok(reply)
+    fn handle_gossip(&self, _output: &mut StdoutLock) -> anyhow::Result<()> {
+        unreachable!()
     }
 }
 

@@ -1,7 +1,14 @@
-use std::io::{BufRead, StdoutLock, Write};
+use std::{
+    io::{BufRead, StdoutLock, Write},
+    time::Duration,
+};
 
 use anyhow::{bail, Context};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    time::Instant,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message<Payload> {
@@ -19,12 +26,32 @@ pub struct Body<Payload> {
     pub payload: Payload,
 }
 
+impl<Payload> Message<Payload> {
+    pub fn into_reply(self, id: Option<usize>) -> Self {
+        Self {
+            src: self.dest,
+            dest: self.src,
+            body: Body {
+                id,
+                in_reply_to: self.body.id,
+                payload: self.body.payload,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum InitPayload {
     Init(Init),
     InitOk,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum Event<Payload> {
+    Message(Message<Payload>),
+    Gossip,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,11 +63,7 @@ pub struct Init {
 pub trait Node<Payload> {
     fn new(id: usize, init: Init) -> Self;
     fn handle(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()>;
-    fn get_reply(
-        &mut self,
-        response: Payload,
-        input: Message<Payload>,
-    ) -> anyhow::Result<Message<Payload>>;
+    fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()>;
 }
 
 fn handle_init(
@@ -64,8 +87,8 @@ fn handle_init(
     Ok((1, init))
 }
 
-pub fn send<P: Serialize>(message: Message<P>, output: &mut StdoutLock) -> anyhow::Result<()> {
-    serde_json::to_writer(&mut *output, &message).context("serializing broadcast reply")?;
+pub fn send<P: Serialize>(message: &Message<P>, output: &mut StdoutLock) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut *output, message).context("serializing broadcast reply")?;
     output
         .write_all(b"\n")
         .context("flushing broadcast reply")?;
@@ -93,6 +116,62 @@ pub fn run_loop<P: DeserializeOwned + Serialize, N: Node<P>>() -> anyhow::Result
         state
             .handle(input, &mut stdout)
             .context("handling message failed")?;
+    }
+    Ok(())
+}
+
+pub async fn async_run_loop<P: DeserializeOwned + Serialize + Send + 'static, N: Node<P>>(
+) -> anyhow::Result<()> {
+    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
+
+    let mut stdout = std::io::stdout().lock();
+
+    // Parse first message from stdin
+    let first_msg = stdin
+        .next_line()
+        .await
+        .expect("did not receive init message")
+        .context("failed to retrieve first message")?;
+    let init_msg: Message<InitPayload> =
+        serde_json::from_str(&first_msg).context("failed to deserialize init message")?;
+
+    // Retrieve init payload, send response, and return payload
+    let (msg_id, init) = handle_init(init_msg, &mut stdout)?;
+
+    let mut state = N::new(msg_id, init);
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event<P>>(100);
+    let stdin_tx = tx.clone();
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = stdin.next_line().await {
+            let Ok(input) = serde_json::from_str(&line) else {
+                return;
+            };
+            let _ = stdin_tx.send(Event::Message(input)).await;
+        }
+    });
+
+    tokio::spawn(async move {
+        // Needs to start after an interval so nodes just starting up don't receive a gossip first
+        let mut timer = tokio::time::interval_at(
+            Instant::now() + Duration::from_millis(300),
+            Duration::from_millis(300),
+        );
+        loop {
+            _ = timer.tick().await;
+            let _ = tx.send(Event::Gossip).await;
+        }
+    });
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            Event::Message(message) => state
+                .handle(message, &mut stdout)
+                .context("handling message failed")?,
+            Event::Gossip => state
+                .handle_gossip(&mut stdout)
+                .context("handling gossip failed")?,
+        };
     }
     Ok(())
 }

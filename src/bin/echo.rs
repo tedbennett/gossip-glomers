@@ -28,37 +28,20 @@ impl Node<EchoPayload> for EchoNode {
         input: Message<EchoPayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match &input.body.payload {
+        let mut reply = input.into_reply(Some(self.id));
+        match reply.body.payload {
             EchoPayload::Echo { echo } => {
-                let reply = self.get_reply(
-                    EchoPayload::EchoOk {
-                        echo: echo.to_string(),
-                    },
-                    input,
-                )?;
-                send(reply, output)?;
+                reply.body.payload = EchoPayload::EchoOk { echo };
+                send(&reply, output)?;
+                self.id += 1;
             }
             EchoPayload::EchoOk { .. } => {}
         }
         Ok(())
     }
 
-    fn get_reply(
-        &mut self,
-        response: EchoPayload,
-        input: Message<EchoPayload>,
-    ) -> anyhow::Result<Message<EchoPayload>> {
-        let reply = Message {
-            src: input.dest,
-            dest: input.src,
-            body: Body {
-                id: Some(self.id),
-                in_reply_to: input.body.id,
-                payload: response,
-            },
-        };
-        self.id += 1;
-        Ok(reply)
+    fn handle_gossip(&self, _output: &mut StdoutLock) -> anyhow::Result<()> {
+        unreachable!()
     }
 }
 
