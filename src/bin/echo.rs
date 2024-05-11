@@ -29,24 +29,37 @@ impl Node<EchoPayload> for EchoNode {
         input: Message<EchoPayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match input.body.payload {
+        match &input.body.payload {
             EchoPayload::Echo { echo } => {
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        id: Some(self.id),
-                        in_reply_to: input.body.id,
-                        payload: EchoPayload::EchoOk { echo },
+                let reply = self.get_reply(
+                    EchoPayload::EchoOk {
+                        echo: echo.to_string(),
                     },
-                };
-                self.id += 1;
-                serde_json::to_writer(&mut *output, &reply).context("serializing echo reply")?;
-                output.write_all(b"\n").context("flushing echo reply")?;
+                    input,
+                )?;
+                send(reply, output)?;
             }
             EchoPayload::EchoOk { .. } => {}
         }
         Ok(())
+    }
+
+    fn get_reply(
+        &mut self,
+        response: EchoPayload,
+        input: Message<EchoPayload>,
+    ) -> anyhow::Result<Message<EchoPayload>> {
+        let reply = Message {
+            src: input.dest,
+            dest: input.src,
+            body: Body {
+                id: Some(self.id),
+                in_reply_to: input.body.id,
+                payload: response,
+            },
+        };
+        self.id += 1;
+        Ok(reply)
     }
 }
 

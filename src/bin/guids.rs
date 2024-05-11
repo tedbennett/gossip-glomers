@@ -29,26 +29,37 @@ impl Node<GeneratePayload> for GenerateNode {
         input: Message<GeneratePayload>,
         output: &mut StdoutLock,
     ) -> anyhow::Result<()> {
-        match input.body.payload {
+        match &input.body.payload {
             GeneratePayload::Generate => {
-                let reply = Message {
-                    src: input.dest,
-                    dest: input.src,
-                    body: Body {
-                        id: Some(self.id),
-                        in_reply_to: input.body.id,
-                        payload: GeneratePayload::GenerateOk {
-                            id: format!("{}-{}", self.node_id, self.id),
-                        },
+                let reply = self.get_reply(
+                    GeneratePayload::GenerateOk {
+                        id: format!("{}-{}", self.node_id, self.id),
                     },
-                };
-                self.id += 1;
-                serde_json::to_writer(&mut *output, &reply).context("serializing guid reply")?;
-                output.write_all(b"\n").context("flushing guid reply")?;
+                    input,
+                )?;
+                send(reply, output)?;
             }
             GeneratePayload::GenerateOk { .. } => {}
         }
         Ok(())
+    }
+
+    fn get_reply(
+        &mut self,
+        response: GeneratePayload,
+        input: Message<GeneratePayload>,
+    ) -> anyhow::Result<Message<GeneratePayload>> {
+        let reply = Message {
+            src: input.dest,
+            dest: input.src,
+            body: Body {
+                id: Some(self.id),
+                in_reply_to: input.body.id,
+                payload: response,
+            },
+        };
+        self.id += 1;
+        Ok(reply)
     }
 }
 

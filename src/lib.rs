@@ -36,6 +36,11 @@ pub struct Init {
 pub trait Node<Payload> {
     fn new(id: usize, init: Init) -> Self;
     fn handle(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()>;
+    fn get_reply(
+        &mut self,
+        response: Payload,
+        input: Message<Payload>,
+    ) -> anyhow::Result<Message<Payload>>;
 }
 
 fn handle_init(
@@ -57,6 +62,14 @@ fn handle_init(
     serde_json::to_writer(&mut *output, &reply).context("serializing init reply")?;
     output.write_all(b"\n").context("flushing init reply")?;
     Ok((1, init))
+}
+
+pub fn send<P: Serialize>(message: Message<P>, output: &mut StdoutLock) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut *output, &message).context("serializing broadcast reply")?;
+    output
+        .write_all(b"\n")
+        .context("flushing broadcast reply")?;
+    Ok(())
 }
 
 pub fn run_loop<P: DeserializeOwned + Serialize, N: Node<P>>() -> anyhow::Result<()> {
