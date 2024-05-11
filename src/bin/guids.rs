@@ -1,7 +1,6 @@
 use gossip_glomers::*;
-use std::io::{StdoutLock, Write};
+use std::io::StdoutLock;
 
-use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
