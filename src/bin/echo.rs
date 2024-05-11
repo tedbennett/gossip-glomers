@@ -40,6 +40,7 @@ impl Node<EchoPayload> for EchoNode {
                         payload: EchoPayload::EchoOk { echo },
                     },
                 };
+                self.id += 1;
                 serde_json::to_writer(&mut *output, &reply).context("serializing echo reply")?;
                 output.write_all(b"\n").context("flushing echo reply")?;
             }
