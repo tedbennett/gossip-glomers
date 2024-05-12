@@ -1,3 +1,6 @@
+serve:
+	maelstrom/maelstrom serve
+
 echo:
 	maelstrom/maelstrom test -w echo --bin target/debug/echo --node-count 1 --time-limit 10	
 
@@ -12,3 +15,6 @@ broadcast-b:
 
 broadcast-c:
 	maelstrom/maelstrom test -w broadcast --bin target/debug/broadcast --node-count 5 --time-limit 20 --rate 10 --nemesis partition
+
+g-counter:
+	maelstrom/maelstrom test -w g-counter --bin target/debug/g-counter --node-count 3 --rate 100 --time-limit 20 --nemesis partition
