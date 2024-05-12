@@ -1,8 +1,5 @@
 use gossip_glomers::*;
-use std::{
-    collections::{HashMap, HashSet},
-    io::StdoutLock,
-};
+use std::{collections::HashMap, io::StdoutLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,19 +7,22 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum GCounterPayload {
-    Add { delta: usize },
+    Add {
+        delta: usize,
+    },
     AddOk,
     Read,
-    ReadOk { value: usize },
-    Topology { topology: Topology },
+    ReadOk {
+        value: usize,
+    },
+    Topology {
+        topology: Topology,
+    },
     TopologyOk,
-    Gossip { messages: Vec<Increment> },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Increment {
-    msg_id: String,
-    delta: usize,
+    Gossip {
+        #[serde(flatten)]
+        values: HashMap<String, usize>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,27 +34,21 @@ struct Topology {
 struct GCounterNode {
     id: usize,
     node_id: String,
-    // Map of message id to increment value
-    messages: HashMap<String, usize>,
-    known_messages: HashMap<String, HashSet<String>>,
-    neighbours: Vec<String>,
+    state: HashMap<String, usize>,
+}
+
+impl GCounterNode {
+    fn add(&mut self, delta: usize) {
+        *self.state.entry(self.node_id.clone()).or_default() += delta;
+    }
 }
 
 impl Node<GCounterPayload> for GCounterNode {
     fn new(id: usize, init: Init) -> Self {
         Self {
             id,
-            neighbours: init
-                .node_ids
-                .clone()
-                .into_iter()
-                .filter(|n| n != &init.node_id)
-                .collect(),
             node_id: init.node_id,
-            messages: HashMap::new(),
-            known_messages: HashMap::from_iter(
-                init.node_ids.into_iter().map(|n| (n, HashSet::new())),
-            ),
+            state: HashMap::from_iter(init.node_ids.into_iter().map(|n| (n, 0))),
         }
     }
 
@@ -66,38 +60,40 @@ impl Node<GCounterPayload> for GCounterNode {
         let mut reply = input.into_reply(Some(self.id));
         match reply.body.payload {
             GCounterPayload::Add { delta } => {
-                // Store in list of messages
-                if let Some(id) = reply.body.id {
-                    self.messages
-                        .insert(format!("{}-{}", self.node_id, id), delta);
-                }
+                // Store in total count
+                self.add(delta);
                 reply.body.payload = GCounterPayload::AddOk;
                 send(&reply, output)?;
                 self.id += 1;
             }
             GCounterPayload::Read => {
                 reply.body.payload = GCounterPayload::ReadOk {
-                    value: self.messages.values().into_iter().sum(),
+                    value: self.state.values().into_iter().sum(),
                 };
 
                 send(&reply, output)?;
                 self.id += 1;
             }
-            GCounterPayload::Topology { topology } => {
-                if let Some(neighbours) = topology.neighbours.get(&self.node_id) {
-                    self.neighbours = neighbours
-                        .to_vec()
-                        .into_iter()
-                        .filter(|n| n != &self.node_id)
-                        .collect();
-                }
+            GCounterPayload::Topology { .. } => {
+                // if let Some(neighbours) = topology.neighbours.get(&self.node_id) {
+                //     self.neighbours = neighbours
+                //         .to_vec()
+                //         .into_iter()
+                //         .filter(|n| n != &self.node_id)
+                //         .collect();
+                // }
                 reply.body.payload = GCounterPayload::TopologyOk;
                 send(&reply, output)?;
                 self.id += 1;
             }
-            GCounterPayload::Gossip { messages } => {
-                for message in messages {
-                    self.messages.insert(message.msg_id, message.delta);
+            GCounterPayload::Gossip { values } => {
+                for (key, value) in values {
+                    if key != self.node_id {
+                        let count = self.state.get(&key).cloned().unwrap_or(0 as usize);
+                        if count < value {
+                            self.state.insert(key, value);
+                        }
+                    }
                 }
             }
             GCounterPayload::TopologyOk
@@ -108,28 +104,24 @@ impl Node<GCounterPayload> for GCounterNode {
     }
 
     fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()> {
-        for neighbour in self.neighbours.as_slice() {
-            let known = &self.known_messages[neighbour];
-            let messages = self
-                .messages
-                .clone()
-                .into_iter()
-                .filter(|m| !known.contains(&m.0))
-                .map(|m| Increment {
-                    msg_id: m.0,
-                    delta: m.1,
-                })
-                .collect();
-            let message = Message {
-                src: self.node_id.clone(),
-                dest: neighbour.to_string(),
-                body: Body {
-                    id: None,
-                    in_reply_to: None,
-                    payload: GCounterPayload::Gossip { messages },
-                },
-            };
-            send(&message, output)?;
+        for neighbour in self.state.keys() {
+            if neighbour != &self.node_id {
+                let message = Message {
+                    src: self.node_id.clone(),
+                    dest: neighbour.to_string(),
+                    body: Body {
+                        id: None,
+                        in_reply_to: None,
+                        payload: GCounterPayload::Gossip {
+                            // Very rudimentary - just dump our whole database
+                            // Probably would want to do a subset of counts we know
+                            // If we were concerned with message size
+                            values: self.state.clone(),
+                        },
+                    },
+                };
+                send(&message, output)?;
+            }
         }
         Ok(())
     }
