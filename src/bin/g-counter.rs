@@ -1,5 +1,5 @@
 use gossip_glomers::*;
-use std::{collections::HashMap, io::StdoutLock};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +34,7 @@ struct Topology {
 struct GCounterNode {
     id: usize,
     node_id: String,
+    // Map of node_id -> count
     state: HashMap<String, usize>,
 }
 
@@ -55,26 +56,25 @@ impl Node<GCounterPayload> for GCounterNode {
     fn handle(
         &mut self,
         input: Message<GCounterPayload>,
-        output: &mut StdoutLock,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<Message<GCounterPayload>>> {
         let mut reply = input.into_reply(Some(self.id));
-        match reply.body.payload {
+        let message = match reply.body.payload {
             GCounterPayload::Add { delta } => {
                 // Store in total count
                 self.add(delta);
                 reply.body.payload = GCounterPayload::AddOk;
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
             GCounterPayload::Read => {
                 reply.body.payload = GCounterPayload::ReadOk {
                     value: self.state.values().into_iter().sum(),
                 };
-
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
             GCounterPayload::Topology { .. } => {
+                // Topology is not used in this example
                 // if let Some(neighbours) = topology.neighbours.get(&self.node_id) {
                 //     self.neighbours = neighbours
                 //         .to_vec()
@@ -83,8 +83,8 @@ impl Node<GCounterPayload> for GCounterNode {
                 //         .collect();
                 // }
                 reply.body.payload = GCounterPayload::TopologyOk;
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
             GCounterPayload::Gossip { values } => {
                 for (key, value) in values {
@@ -95,15 +95,17 @@ impl Node<GCounterPayload> for GCounterNode {
                         }
                     }
                 }
+                None
             }
             GCounterPayload::TopologyOk
             | GCounterPayload::ReadOk { .. }
-            | GCounterPayload::AddOk { .. } => {}
-        }
-        Ok(())
+            | GCounterPayload::AddOk { .. } => None,
+        };
+        Ok(message)
     }
 
-    fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()> {
+    fn handle_gossip(&self) -> anyhow::Result<Vec<Message<GCounterPayload>>> {
+        let mut messages = Vec::new();
         for neighbour in self.state.keys() {
             if neighbour != &self.node_id {
                 let message = Message {
@@ -120,10 +122,10 @@ impl Node<GCounterPayload> for GCounterNode {
                         },
                     },
                 };
-                send(&message, output)?;
+                messages.push(message);
             }
         }
-        Ok(())
+        Ok(messages)
     }
 }
 

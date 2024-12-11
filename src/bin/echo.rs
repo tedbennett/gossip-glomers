@@ -1,5 +1,4 @@
 use gossip_glomers::*;
-use std::io::StdoutLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,21 +25,20 @@ impl Node<EchoPayload> for EchoNode {
     fn handle(
         &mut self,
         input: Message<EchoPayload>,
-        output: &mut StdoutLock,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<Message<EchoPayload>>> {
         let mut reply = input.into_reply(Some(self.id));
-        match reply.body.payload {
+        let message = match reply.body.payload {
             EchoPayload::Echo { echo } => {
                 reply.body.payload = EchoPayload::EchoOk { echo };
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
-            EchoPayload::EchoOk { .. } => {}
-        }
-        Ok(())
+            EchoPayload::EchoOk { .. } => None,
+        };
+        Ok(message)
     }
 
-    fn handle_gossip(&self, _output: &mut StdoutLock) -> anyhow::Result<()> {
+    fn handle_gossip(&self) -> anyhow::Result<Vec<Message<EchoPayload>>> {
         unreachable!()
     }
 }

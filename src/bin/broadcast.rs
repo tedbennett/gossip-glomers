@@ -1,8 +1,5 @@
 use gossip_glomers::*;
-use std::{
-    collections::{HashMap, HashSet},
-    io::StdoutLock,
-};
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -53,44 +50,44 @@ impl Node<BroadcastPayload> for BroadcastNode {
     fn handle(
         &mut self,
         input: Message<BroadcastPayload>,
-        output: &mut StdoutLock,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<Message<BroadcastPayload>>> {
         let mut reply = input.into_reply(Some(self.id));
-        match reply.body.payload {
+        let message = match reply.body.payload {
             BroadcastPayload::Broadcast { message } => {
                 // Store in list of messages
                 self.messages.insert(message);
-                reply.body.payload = BroadcastPayload::BroadcastOk;
-                send(&reply, output)?;
                 self.id += 1;
+                reply.body.payload = BroadcastPayload::BroadcastOk;
+                Some(reply)
             }
             BroadcastPayload::Read => {
                 reply.body.payload = BroadcastPayload::ReadOk {
                     messages: self.messages.clone(),
                 };
-
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
             BroadcastPayload::Topology { topology } => {
                 if let Some(neighbours) = topology.neighbours.get(&self.node_id) {
                     self.neighbours = neighbours.to_vec();
                 }
                 reply.body.payload = BroadcastPayload::TopologyOk;
-                send(&reply, output)?;
                 self.id += 1;
+                Some(reply)
             }
             BroadcastPayload::Gossip { messages } => {
                 self.messages.extend(messages);
+                None
             }
             BroadcastPayload::TopologyOk
             | BroadcastPayload::ReadOk { .. }
-            | BroadcastPayload::BroadcastOk { .. } => {}
-        }
-        Ok(())
+            | BroadcastPayload::BroadcastOk { .. } => None,
+        };
+        Ok(message)
     }
 
-    fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()> {
+    fn handle_gossip(&self) -> anyhow::Result<Vec<Message<BroadcastPayload>>> {
+        let mut gossips = Vec::new();
         for neighbour in self.neighbours.as_slice() {
             let known = &self.known_messages[neighbour];
             let messages = self
@@ -108,9 +105,9 @@ impl Node<BroadcastPayload> for BroadcastNode {
                     payload: BroadcastPayload::Gossip { messages },
                 },
             };
-            send(&message, output)?;
+            gossips.push(message);
         }
-        Ok(())
+        Ok(gossips)
     }
 }
 

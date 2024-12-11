@@ -62,8 +62,8 @@ pub struct Init {
 
 pub trait Node<Payload> {
     fn new(id: usize, init: Init) -> Self;
-    fn handle(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()>;
-    fn handle_gossip(&self, output: &mut StdoutLock) -> anyhow::Result<()>;
+    fn handle(&mut self, input: Message<Payload>) -> anyhow::Result<Option<Message<Payload>>>;
+    fn handle_gossip(&self) -> anyhow::Result<Vec<Message<Payload>>>;
 }
 
 fn handle_init(
@@ -113,9 +113,10 @@ pub fn run_loop<P: DeserializeOwned + Serialize, N: Node<P>>() -> anyhow::Result
         let line = line.context("failed to read next line")?;
         let input: Message<P> =
             serde_json::from_str(&line).context("failed to deserialize message")?;
-        state
-            .handle(input, &mut stdout)
-            .context("handling message failed")?;
+        let message = state.handle(input).context("handling message failed")?;
+        if let Some(message) = message {
+            send(&message, &mut stdout)?;
+        }
     }
     Ok(())
 }
@@ -165,12 +166,18 @@ pub async fn async_run_loop<P: DeserializeOwned + Serialize + Send + 'static, N:
 
     while let Some(event) = rx.recv().await {
         match event {
-            Event::Message(message) => state
-                .handle(message, &mut stdout)
-                .context("handling message failed")?,
-            Event::Gossip => state
-                .handle_gossip(&mut stdout)
-                .context("handling gossip failed")?,
+            Event::Message(message) => {
+                let message = state.handle(message).context("handling message failed")?;
+                if let Some(message) = message {
+                    send(&message, &mut stdout)?;
+                }
+            }
+            Event::Gossip => {
+                let messages = state.handle_gossip().context("handling gossip failed")?;
+                for message in messages {
+                    send(&message, &mut stdout)?;
+                }
+            }
         };
     }
     Ok(())

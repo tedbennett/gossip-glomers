@@ -8,7 +8,13 @@ Make sure you have Rust installed, and Maelstrom. Maelstrom should be located in
 
 ## Run Challenges
 
-There's a Just recipe for each challenge. e.g:
+There's a Just recipe for each challenge:
 - `just echo`
 - `just guids`
-- `just broadcast`
+- `just broadcast-a`
+- `just broadcast-b`
+- `just broadcast-c`
+- `just broadcast-d`
+- `just broadcast-e`
+- `just g-counter`
+- `just kafka-a`
